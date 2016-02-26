@@ -1,0 +1,155 @@
+---
+title: "Practical Machine Learning Project"
+author: "zv"
+date: "19 February 2016"
+output: html_document
+---
+
+## Summary
+In this project, data from the Weight Lifting Exercise (http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset) is used. This dataset contains data the goal was be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. These participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal of this project is to predict the manner in which they did the exercise. 
+
+In this project, we have used decision trees, "tuned" decision trees and random forest to create prediction models and ran predictions on the testing data. Results have shown that random forest with 10 fold cross validation predict the best results with of 99% accuracy. 
+
+## Load data and required libraries
+```{r setwd,echo=FALSE, message=FALSE}
+setwd("~/pml")
+```
+For data modeling and prediction, *caret* and *rattle* has been used.
+```{r required_libraries, warning=FALSE, message=FALSE}
+library(caret)
+library(rattle)
+```
+
+Training and testing datasets are downloaded first. If datasets already exist in working directory, then download is skipped. Dataset files are read into two data frames. 
+```{r load_data}
+urlTraining <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+urlTesting <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+fileTraining <- "./pml-training.csv"
+fileTesting <- "./pml-testing.csv"
+
+if (!file.exists(fileTraining)) {
+        download.file(urlTraining, fileTraining, method="curl")
+}
+
+if (!file.exists(fileTesting)) {
+        download.file(urlTesting, fileTesting, method="curl")
+}
+
+dataTraining <- read.csv(fileTraining, header=TRUE, sep=",", na.strings = c("NA","#DIV/0!",""))
+dataTesting <- read.csv(fileTesting, header=TRUE, sep=",", na.strings = c("NA","#DIV/0!",""))
+```
+
+Training data set contains *classe* variable, which is used fro predictions and testing dataset will be used at the end of this exercise. It contains 20 cases for which we need to predict *classe*. Testing dataset doesn't contain *classe*.
+
+To validate training model, the training dataset needs to be split to training and cross-validation data set. But before that we need to clean the training data set and apply transformations to testing data set as well.
+
+## Data Cleaning
+
+Initially, all columns with NA valuse are removed from training dataset. Additionally, only columns with names containing strings "_belt", "_forearm", "_arm" and "dumbbell" are kept, all others are removed. After transformations are done on training data set, the same transformations are done on testing dataset.
+
+```{r clean_data}
+classe <- dataTraining$classe
+dataTraining <- dataTraining[,colSums(is.na(dataTraining)) == 0]
+colsInclude <- grepl("_belt|_forearm|_arm|_dumbbell", names(dataTraining))
+dataTraining <- dataTraining[,colsInclude]
+predictorCols <- names(dataTraining)
+dataTesting <- dataTesting[, predictorCols]
+```
+
+Finally, there are `r dim(dataTraining)[2]` columns in both datasets. In training dataset, column *classe* will be added so we could build model and predict based on it. 
+
+## Prepare training and cross validation sets
+
+Training dataset is split, so 70% of records is used for training the model and 30% is used for cross-validation.
+
+```{r train_data}
+dataTraining <- cbind(classe, dataTraining)
+set.seed(817)
+inTrain <- createDataPartition(dataTraining$classe, p=0.7, list=FALSE)
+dataTrainingT<- dataTraining[inTrain, ]
+dataTrainingCV <- dataTraining[-inTrain,]
+```
+
+## Decision Tree 
+
+Using training data, we will create a new prediction model using decision tree. 
+
+````{r decision_tree, warning=FALSE, message=FALSE}
+fitModDT <- train(classe~., data=dataTrainingT, method="rpart")
+fitModDT
+```
+
+As you can see, the accuracy of the model is actually not really high, `r round(fitModDT$results[1,2],2)*100`% for cost-complexity parameter `r round(fitModDT$results[1,1],4)`. 
+
+Let's plot the decision tree for our model:
+
+```{r display_DT}
+fancyRpartPlot(fitModDT$finalModel, sub="")
+```
+
+## Tuned Decision Tree
+
+To improve decision tree model, we could tune it. The tuneLength function can be used to evaluate a broader set of models. The default resampling scheme for rpart is the bootstrap. In the model below, we are using 3 times repeated 10–fold cross–validation instead. 
+
+```{r decision_tree_tuning}
+fitModDT <- train(classe~., data=dataTrainingT, method="rpart", tuneLength=10, trControl=trainControl(method = "repeatedcv", repeats = 3))
+fitModDT
+```
+
+As you can see, the "tuned" model shows much better accuracy then the model without tuning, `r round(fitModDT$results[1,2],2)*100`%.
+
+Additionally, our decision tree model can be presented graphically:
+
+```{r display_DT_tuning}
+fancyRpartPlot(fitModDT$finalModel, sub="")
+```
+
+Decision tree graph is a bit more complex, isn't it? 
+
+We can now run prediction using previously separated (30% of training dataset) cross validation dataset and compare predicted results with actual values of *classe*.
+
+```{r predicting_with_DT}
+predictDT_CV <- predict(fitModDT, dataTrainingCV) 
+confusionMatrix(dataTrainingCV$classe, predictDT_CV)
+```
+
+Prediction using cross validation set actually confirms what we actually expected, the model is about 70% accurate. 
+
+## Random Forest
+
+To build better prediction model we are going to use Random Forest algorithm. We will use 5-fold cross-validation resampling method (10-fold cross-validation turned out to be much more computationally intensive and last quite long, but results are not that different). We are also setting number of trees (ntree) parameter to 100.
+
+```{r random_forest, warning=FALSE, message=FALSE}
+set.seed(817)
+fitModRF <- train(classe~., data=dataTrainingT, method = "rf", trControl=trainControl(method="cv",5), ntree=100)
+```
+
+Model plot will show that the best accuracy when split is made when `r fitModRF$bestTune` (mtry) features/predictors are used. In that case, accuracy is `r round(fitModRF$results[which(fitModRF$results$mtry==fitModRF$bestTun[1,1]),2],2)*100`%.
+
+```{r plot_rf}
+plot.train(fitModRF)
+```
+
+We can see the details in finalModel:
+
+```{r final_rf}
+fitModRF
+```
+
+Let's run prediction for our cross validation data set and check confusion matrix in which we compare predicted values with cross validation valuse of *classe*.
+
+```{r predict_RF}
+predictRF_CV <- predict(fitModRF, dataTrainingCV) 
+confusionMatrix(dataTrainingCV$classe, predictRF_CV)
+```
+
+We can be very satisfied with the final results. Out of sample error for the model is `r round(100-confusionMatrix(dataTrainingCV$classe, predictRF_CV)$overall[1]*100,2)`% (Accuracy = `r round(confusionMatrix(dataTrainingCV$classe, predictRF_CV)$overall[1],2)*100`%).
+
+## Applying testing data set on Random Forest model
+
+Finally, we have to predict on the testing dataset and submit 20 answers to the final quiz. 
+
+```{r predict_on_testdata}
+predictTestRF <- predict(fitModRF, dataTesting)
+predictTestRF
+```
